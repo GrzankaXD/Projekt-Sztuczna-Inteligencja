@@ -1,0 +1,11 @@
+
+transformers
+torch
+sentence-transformers
+chromadb
+langchain
+pandas
+requests
+fastapi
+uvicorn
+scikit-learn
