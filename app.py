@@ -1,48 +1,112 @@
-
+import os
+import time
 import requests
 import pandas as pd
-from fastapi import FastAPI
-from sentence_transformers import SentenceTransformer
-import chromadb
-from sklearn.linear_model import LinearRegression
 import numpy as np
+import chromadb
 
-app = FastAPI()
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from sentence_transformers import SentenceTransformer
+from sklearn.linear_model import LinearRegression
 
-# Load embedding model (identical in both environments)
+app = FastAPI(title="RAG Air Quality Project")
+
+# ===== Prometheus metrics =====
+REQUEST_COUNT = Counter(
+    "app_requests_total",
+    "Total number of requests",
+    ["method", "endpoint", "status"]
+)
+
+REQUEST_LATENCY = Histogram(
+    "app_request_latency_seconds",
+    "Request latency in seconds",
+    ["endpoint"]
+)
+
+INDEXED_RECORDS = Gauge(
+    "app_indexed_records",
+    "Number of records indexed in vector database"
+)
+
+QUERY_COUNT = Counter(
+    "app_queries_total",
+    "Number of query requests"
+)
+
+FORECAST_COUNT = Counter(
+    "app_forecasts_total",
+    "Number of forecast requests"
+)
+
+PIPELINE_RUNS = Counter(
+    "app_pipeline_runs_total",
+    "Number of pipeline runs"
+)
+
+# ===== Model + Chroma =====
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-# Initialize ChromaDB
-client = chromadb.Client()
-collection = client.get_or_create_collection("air_quality")
+CHROMA_PATH = os.getenv("CHROMA_PATH", "/data/chroma")
+client = chromadb.PersistentClient(path=CHROMA_PATH)
+collection = client.get_or_create_collection(name="air_quality")
+
+
+def track_request(endpoint_name: str, status_code: str, elapsed: float, method: str = "GET"):
+    REQUEST_COUNT.labels(method=method, endpoint=endpoint_name, status=status_code).inc()
+    REQUEST_LATENCY.labels(endpoint=endpoint_name).observe(elapsed)
+
 
 def fetch_air_quality():
     url = "https://api.openaq.org/v2/latest"
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
     return response.json()
+
 
 def process_data(data):
     records = []
     for result in data.get("results", []):
         for measurement in result.get("measurements", []):
-            records.append({
-                "location": result.get("location"),
-                "parameter": measurement.get("parameter"),
-                "value": measurement.get("value"),
-                "unit": measurement.get("unit")
-            })
+            records.append(
+                {
+                    "location": result.get("location"),
+                    "parameter": measurement.get("parameter"),
+                    "value": measurement.get("value"),
+                    "unit": measurement.get("unit"),
+                }
+            )
     return pd.DataFrame(records)
 
-def index_documents(df):
+
+def index_documents(df: pd.DataFrame):
+    if df.empty:
+        return 0
+
     documents = df.astype(str).apply(lambda x: " ".join(x), axis=1).tolist()
     embeddings = embedding_model.encode(documents).tolist()
-    ids = [str(i) for i in range(len(documents))]
-    collection.add(documents=documents, embeddings=embeddings, ids=ids)
+    ids = [f"doc_{i}" for i in range(len(documents))]
 
-def retrieve_context(query):
+    # uproszczenie: czyścimy kolekcję przed nowym indeksem
+    existing = collection.get()
+    if existing and existing.get("ids"):
+        collection.delete(ids=existing["ids"])
+
+    collection.add(documents=documents, embeddings=embeddings, ids=ids)
+    INDEXED_RECORDS.set(len(documents))
+    return len(documents)
+
+
+def retrieve_context(query: str):
     query_embedding = embedding_model.encode([query]).tolist()
     results = collection.query(query_embeddings=query_embedding, n_results=5)
-    return " ".join(results["documents"][0]) if results["documents"] else ""
+    docs = results.get("documents", [])
+    if docs and docs[0]:
+        return " ".join(docs[0])
+    return ""
+
 
 def forecast_pm(values):
     X = np.arange(len(values)).reshape(-1, 1)
@@ -52,31 +116,96 @@ def forecast_pm(values):
     next_value = model.predict([[len(values)]])[0]
     return float(next_value)
 
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/run_pipeline")
 def run_pipeline():
-    data = fetch_air_quality()
-    df = process_data(data)
-    if df.empty:
-        return {"error": "No data fetched"}
-    index_documents(df)
-    return {"status": "Data indexed successfully", "records": len(df)}
+    start = time.perf_counter()
+    try:
+        data = fetch_air_quality()
+        df = process_data(data)
+        if df.empty:
+            track_request("/run_pipeline", "400", time.perf_counter() - start)
+            raise HTTPException(status_code=400, detail="No data fetched")
+
+        indexed = index_documents(df)
+        PIPELINE_RUNS.inc()
+        elapsed = time.perf_counter() - start
+        track_request("/run_pipeline", "200", elapsed)
+
+        return {
+            "status": "Data indexed successfully",
+            "records": indexed,
+            "chroma_path": CHROMA_PATH,
+            "collection": "air_quality",
+        }
+    except Exception as e:
+        elapsed = time.perf_counter() - start
+        track_request("/run_pipeline", "500", elapsed)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/query")
 def query_agent(question: str):
-    context = retrieve_context(question)
-    response = f"Na podstawie danych: {context[:1000]} ... \nOdpowiedź na pytanie: {question}"
-    return {"response": response}
+    start = time.perf_counter()
+    try:
+        QUERY_COUNT.inc()
+        context = retrieve_context(question)
+        response = f"Na podstawie danych: {context[:1000]}\n\nOdpowiedź na pytanie: {question}"
+        elapsed = time.perf_counter() - start
+        track_request("/query", "200", elapsed)
+        return {"response": response}
+    except Exception as e:
+        elapsed = time.perf_counter() - start
+        track_request("/query", "500", elapsed)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/forecast")
 def forecast():
-    data = fetch_air_quality()
-    df = process_data(data)
-    pm25 = df[df["parameter"] == "pm25"]["value"].tolist()
-    if len(pm25) < 5:
-        return {"error": "Not enough PM2.5 data for forecasting"}
-    prediction = forecast_pm(pm25[:10])
-    return {"predicted_pm25_next": prediction}
+    start = time.perf_counter()
+    try:
+        FORECAST_COUNT.inc()
+        data = fetch_air_quality()
+        df = process_data(data)
+        pm25 = df[df["parameter"] == "pm25"]["value"].tolist()
+
+        if len(pm25) < 5:
+            elapsed = time.perf_counter() - start
+            track_request("/forecast", "400", elapsed)
+            raise HTTPException(status_code=400, detail="Not enough PM2.5 data for forecasting")
+
+        prediction = forecast_pm(pm25[:10])
+        elapsed = time.perf_counter() - start
+        track_request("/forecast", "200", elapsed)
+        return {"predicted_pm25_next": prediction}
+    except Exception as e:
+        elapsed = time.perf_counter() - start
+        track_request("/forecast", "500", elapsed)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vector-db")
+def vector_db_info():
+    count = collection.count()
+    sample = collection.peek(limit=5)
+    return {
+        "collection": "air_quality",
+        "chroma_path": CHROMA_PATH,
+        "document_count": count,
+        "sample": sample,
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)
