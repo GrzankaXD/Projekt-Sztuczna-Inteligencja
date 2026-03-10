@@ -1,52 +1,36 @@
 import os
 import time
-import requests
-import pandas as pd
-import numpy as np
-import chromadb
 
+import chromadb
+import numpy as np
+import pandas as pd
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from sentence_transformers import SentenceTransformer
 from sklearn.linear_model import LinearRegression
 
 app = FastAPI(title="RAG Air Quality Project")
 
-# ===== Prometheus metrics =====
 REQUEST_COUNT = Counter(
     "app_requests_total",
     "Total number of requests",
-    ["method", "endpoint", "status"]
+    ["method", "endpoint", "status"],
 )
-
 REQUEST_LATENCY = Histogram(
     "app_request_latency_seconds",
     "Request latency in seconds",
-    ["endpoint"]
+    ["endpoint"],
 )
-
 INDEXED_RECORDS = Gauge(
     "app_indexed_records",
-    "Number of records indexed in vector database"
+    "Number of records indexed in vector database",
 )
+QUERY_COUNT = Counter("app_queries_total", "Number of query requests")
+FORECAST_COUNT = Counter("app_forecasts_total", "Number of forecast requests")
+PIPELINE_RUNS = Counter("app_pipeline_runs_total", "Number of pipeline runs")
 
-QUERY_COUNT = Counter(
-    "app_queries_total",
-    "Number of query requests"
-)
-
-FORECAST_COUNT = Counter(
-    "app_forecasts_total",
-    "Number of forecast requests"
-)
-
-PIPELINE_RUNS = Counter(
-    "app_pipeline_runs_total",
-    "Number of pipeline runs"
-)
-
-# ===== Model + Chroma =====
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 CHROMA_PATH = os.getenv("CHROMA_PATH", "/data/chroma")
@@ -54,19 +38,19 @@ client = chromadb.PersistentClient(path=CHROMA_PATH)
 collection = client.get_or_create_collection(name="air_quality")
 
 
-def track_request(endpoint_name: str, status_code: str, elapsed: float, method: str = "GET"):
+def track_request(endpoint_name: str, status_code: str, elapsed: float, method: str = "GET") -> None:
     REQUEST_COUNT.labels(method=method, endpoint=endpoint_name, status=status_code).inc()
     REQUEST_LATENCY.labels(endpoint=endpoint_name).observe(elapsed)
 
 
-def fetch_air_quality():
+def fetch_air_quality() -> dict:
     url = "https://api.openaq.org/v2/latest"
     response = requests.get(url, timeout=30)
     response.raise_for_status()
     return response.json()
 
 
-def process_data(data):
+def process_data(data: dict) -> pd.DataFrame:
     records = []
     for result in data.get("results", []):
         for measurement in result.get("measurements", []):
@@ -81,7 +65,7 @@ def process_data(data):
     return pd.DataFrame(records)
 
 
-def index_documents(df: pd.DataFrame):
+def index_documents(df: pd.DataFrame) -> int:
     if df.empty:
         return 0
 
@@ -89,7 +73,6 @@ def index_documents(df: pd.DataFrame):
     embeddings = embedding_model.encode(documents).tolist()
     ids = [f"doc_{i}" for i in range(len(documents))]
 
-    # uproszczenie: czyścimy kolekcję przed nowym indeksem
     existing = collection.get()
     if existing and existing.get("ids"):
         collection.delete(ids=existing["ids"])
@@ -99,7 +82,7 @@ def index_documents(df: pd.DataFrame):
     return len(documents)
 
 
-def retrieve_context(query: str):
+def retrieve_context(query: str) -> str:
     query_embedding = embedding_model.encode([query]).tolist()
     results = collection.query(query_embeddings=query_embedding, n_results=5)
     docs = results.get("documents", [])
@@ -108,13 +91,23 @@ def retrieve_context(query: str):
     return ""
 
 
-def forecast_pm(values):
+def forecast_pm(values) -> float:
     X = np.arange(len(values)).reshape(-1, 1)
     y = np.array(values)
     model = LinearRegression()
     model.fit(X, y)
     next_value = model.predict([[len(values)]])[0]
     return float(next_value)
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "RAG Air Quality Project",
+        "docs": "/docs",
+        "health": "/health",
+        "metrics": "/metrics",
+    }
 
 
 @app.get("/health")

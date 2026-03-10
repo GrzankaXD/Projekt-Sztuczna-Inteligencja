@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   app:
     build: .
@@ -10,8 +8,6 @@ services:
       - chroma_data:/data/chroma
     environment:
       - CHROMA_PATH=/data/chroma
-    depends_on:
-      - prometheus
 
   prometheus:
     image: prom/prometheus:latest

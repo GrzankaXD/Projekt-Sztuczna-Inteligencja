@@ -1,12 +1,19 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "graphTooltip": 0,
   "panels": [
     {
       "type": "timeseries",
       "title": "Liczba zapytań /query",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "app_queries_total",
@@ -17,7 +24,12 @@
     {
       "type": "timeseries",
       "title": "Uruchomienia pipeline",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "app_pipeline_runs_total",
@@ -28,7 +40,12 @@
     {
       "type": "timeseries",
       "title": "Latency /query (średnia z 1m)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "targets": [
         {
           "expr": "rate(app_request_latency_seconds_sum{endpoint=\"/query\"}[1m]) / rate(app_request_latency_seconds_count{endpoint=\"/query\"}[1m])",
@@ -39,7 +56,12 @@
     {
       "type": "stat",
       "title": "Zaindeksowane rekordy",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
       "targets": [
         {
           "expr": "app_indexed_records",
@@ -50,9 +72,17 @@
   ],
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["rag", "air-quality"],
-  "templating": { "list": [] },
-  "time": { "from": "now-15m", "to": "now" },
+  "tags": [
+    "rag",
+    "air-quality"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
   "timezone": "browser",
   "title": "RAG Air Quality Dashboard",
   "version": 1

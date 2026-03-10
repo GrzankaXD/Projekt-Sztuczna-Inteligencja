@@ -1,59 +1,60 @@
-
 # RAG Air Quality Project
 
-## Opis projektu
-Projekt implementuje dwóch agentów RAG (HuggingFace + Google Colab) 
-z wykorzystaniem identycznego modelu językowego, embeddingów oraz bazy wektorowej (ChromaDB).
+Projekt implementuje prosty system RAG dla danych jakości powietrza z użyciem FastAPI, ChromaDB i embeddingów Sentence Transformers. Dodatkowo projekt spełnia wymagania zaliczeniowe dotyczące Docker Compose, trwałości zasobów, Prometheusa i Grafany.
 
-Model embeddingów:
-- sentence-transformers/all-MiniLM-L6-v2
-
-Baza wektorowa:
+## Technologie
+- FastAPI
 - ChromaDB
+- sentence-transformers/all-MiniLM-L6-v2
+- Prometheus (`prometheus-client`)
+- Grafana
+- Docker Compose
 
-## Funkcjonalności
-- Pobieranie danych jakości powietrza (OpenAQ API)
-- Indeksowanie danych do bazy wektorowej
-- Mechanizm Retrieval-Augmented Generation (RAG)
-- Prognozowanie PM2.5 (Linear Regression)
+## Uruchomienie
+```bash
+docker compose up --build
+```
 
-## Uruchomienie (Docker)
+## Usługi
+- Aplikacja: `http://localhost:8000`
+- Healthcheck: `http://localhost:8000/health`
+- Metryki: `http://localhost:8000/metrics`
+- Informacje o bazie wektorowej: `http://localhost:8000/vector-db`
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000`
 
-1. Zbuduj obraz:
-   docker build -t rag-air-quality .
+## Przykładowe wywołania
+Najpierw załaduj dane do bazy wektorowej:
+```bash
+curl "http://localhost:8000/run_pipeline"
+```
 
-2. Uruchom kontener:
-   docker run -p 8000:8000 rag-air-quality
+Pokaż zawartość bazy wektorowej:
+```bash
+curl "http://localhost:8000/vector-db"
+```
 
-3. Endpointy:
-   /run_pipeline
-   /query?question=...
-   /forecast
+Zadaj pytanie do RAG:
+```bash
+curl "http://localhost:8000/query?question=Jakie są dane o PM2.5?"
+```
 
-## Implementacja w Google Colab
+Uruchom prognozę:
+```bash
+curl "http://localhost:8000/forecast"
+```
 
-1. Zainstaluj Docker:
-   !apt install docker.io
+## Trwałość zasobów
+Docker Compose używa wolumenów:
+- `chroma_data`
+- `prometheus_data`
+- `grafana_data`
 
-2. Skopiuj pliki projektu
-3. Zbuduj i uruchom kontener
+Dzięki temu dane ChromaDB, Prometheusa i Grafany są zachowane po restarcie kontenerów.
 
-## Implementacja w Hugging Face
-
-1. Utwórz Space typu Docker
-2. Wgraj pliki projektu
-3. HF automatycznie zbuduje obraz
-
-## Porównanie
-
-W obu środowiskach:
-- Ten sam model embeddingów
-- Ta sama baza ChromaDB
-- Identyczna konfiguracja chunkowania
-- Te same dane wejściowe
-
-Metryki porównania:
-- Czas odpowiedzi
-- Zużycie pamięci
-- Stabilność działania
-- Trafność odpowiedzi
+## Metryki
+Aplikacja wystawia endpoint `/metrics`, z którego Prometheus pobiera dane. Dashboard Grafany jest provisionowany z pliku i pokazuje:
+- liczbę zapytań `/query`
+- liczbę uruchomień pipeline
+- średni czas odpowiedzi `/query`
+- liczbę rekordów w bazie wektorowej
